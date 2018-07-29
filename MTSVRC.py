@@ -107,7 +107,7 @@ class MTSVRC:
             if save:
                 self.save(acc,epoch)
         print('Training has finished!')
-    def val(self):
+    def val(self,filein_batch = 16,batch_size=8):
         print("Start validating!")
         train_num = 16192
         sample_index = 0

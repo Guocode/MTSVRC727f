@@ -310,9 +310,13 @@ class P3D(nn.Module):
         return correct, train_loss
 
 
-    def val_model(self):
-        print("Start model validation!")
-        pass
+    def val_model(self,inputs_batch, targets_batch):
+        self = self.to('device')
+        inputs_batch, targets_batch = inputs_batch.float().to(device), targets_batch.to(device)
+        outputs = self(inputs_batch)
+        _, predicted = outputs.max(1)
+        correct = (targets_batch.int() == predicted.int()).sum().item()
+        return correct
 
     def save_model(self, acc, epoch):
         state = {
