@@ -4,6 +4,7 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import datetime
 '''
 function: return RGB & Flow [outframe*reh*rew*3]
 '''
@@ -11,7 +12,6 @@ def cvread_video_rgb(video_path,outframe=16,reh=256,rew=256,show=False):
     cap = cv2.VideoCapture(video_path)
     frames_num = cap.get(7)
     fps = cap.get(5)
-    num = 0
     RGBs = []
     frames = [round((frames_num-1)/(outframe-1)*x) for x in list(range(outframe))] #frame index to read
     prev = np.zeros((reh,rew,3),dtype='uint8')
@@ -43,7 +43,6 @@ def cvread_video_rgb(video_path,outframe=16,reh=256,rew=256,show=False):
 
     cap.release()
     RGBs = np.array(RGBs)
-
     return RGBs
 
 def cvread_video_flow(video_path,outframe=16,reh=256,rew=256,show=False):
@@ -90,5 +89,15 @@ def cvread_video_flow(video_path,outframe=16,reh=256,rew=256,show=False):
     return flows
 
 if __name__ == '__main__':
-    rgbs = cvread_video_rgb("/Users/guoziheng/Movies/5.mp4",outframe=16,reh=256,rew=256,show=True)
+    d1 = datetime.datetime.now()
+    path = "D:/1000006114.mp4" #"/Users/guoziheng/Movies/5.mp4"
+    rgbs = cvread_video_rgb(path,outframe=64,reh=256,rew=256,show=True)
+    np.save("np.npy",rgbs) #每512个视频一读 就是6G内存
+    d2 = datetime.datetime.now()
+    print((d2-d1))
     print(rgbs.shape)
+
+    d1 = datetime.datetime.now()
+    a = np.load("np.npy")
+    d2 = datetime.datetime.now()
+    print((d2-d1))

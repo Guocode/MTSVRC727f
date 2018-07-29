@@ -306,17 +306,23 @@ class P3D(nn.Module):
         # total += targets_batch.size(0)
         correct = (targets_batch.int() == predicted.int()).sum().item()
         # progress_bar\
-
         return correct, train_loss
 
 
     def val_model(self,inputs_batch, targets_batch):
-        self = self.to('device')
+        saved_model = "./checkpoint/ckpt-epoch-5.t7"
+        criterion = nn.CrossEntropyLoss()
+        if os._exists(saved_model):
+            weights = torch.load(saved_model)['state_dict']
+            self.load_state_dict(weights)
+            print("weight loaded!")
         inputs_batch, targets_batch = inputs_batch.float().to(device), targets_batch.to(device)
         outputs = self(inputs_batch)
+        loss = criterion(outputs.float(), targets_batch.long())
+        val_loss = loss.item()
         _, predicted = outputs.max(1)
         correct = (targets_batch.int() == predicted.int()).sum().item()
-        return correct
+        return correct,val_loss
 
     def save_model(self, acc, epoch):
         state = {
@@ -442,8 +448,9 @@ def get_optim_policies(model=None, modality='RGB', enable_pbn=True):
 
 
 if __name__ == '__main__':
-    model = P3D63(num_classes=50)
+    model = P3D131(num_classes=50).to(device)
     print(model)
     traindata = torch.autograd.Variable(torch.rand(1, 3, 16, 256, 256))
     label = torch.autograd.Variable(torch.floor(torch.rand(1) * 50).int())
-    model.train(traindata, label, batch_size=1, learning_rate=0.1)  # N*64*256*256*3 N*50
+    # a ,b = model.train_on_batch(traindata, label, batch_size=1, learning_rate=0.1)  # N*64*256*256*3 N*50
+    print(model.val_model(traindata, label))

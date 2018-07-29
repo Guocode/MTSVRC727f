@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from p3d_model import P3D199,P3D63
 import torch
-from cvread_video import cvread_video
+from cvread_video import cvread_video_rgb
 from torch.utils.data import TensorDataset, DataLoader
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 class MTSVRC:
@@ -82,7 +82,7 @@ class MTSVRC:
             while(sample_index+filein_batch<=train_num):#file batch
                 traindata = []
                 for filename in self.label_train.iloc[sample_index:sample_index+filein_batch,0]:
-                    rgb, flows = cvread_video(self.data_path+str(filename)+'.mp4',outframe=16,reh=256,rew=256)
+                    rgb = cvread_video_rgb(self.data_path+str(filename)+'.mp4',outframe=16,reh=256,rew=256)
                     traindata.append(rgb)
                 traindata = np.array(traindata).reshape(filein_batch,3,16,256,256)/256
                 traindata = torch.from_numpy(traindata)#Variable(torch.rand(1, 3, 16, 256, 256))
@@ -109,38 +109,34 @@ class MTSVRC:
         print('Training has finished!')
     def val(self,filein_batch = 16,batch_size=8):
         print("Start validating!")
+        self.p3d_model.to("device")
         train_num = 16192
         sample_index = 0
-        epoch_corr = 0
-        epoch_train_loss = 0
-        epoch_batch_idx = 1
-        while (sample_index + filein_batch <= train_num):  # file batch
-            traindata = []
-            for filename in self.label_val.iloc[sample_index:sample_index + filein_batch, 0]:
-                rgb, flows = cvread_video(self.data_path + str(filename) + '.mp4', outframe=16, reh=256, rew=256)
-                traindata.append(rgb)
-            traindata = np.array(traindata).reshape(filein_batch, 3, 16, 256, 256) / 256
-            traindata = torch.from_numpy(traindata)  # Variable(torch.rand(1, 3, 16, 256, 256))
-            labeldata = torch.from_numpy(self.label_train.iloc[sample_index:sample_index + filein_batch, 2].values)
-            if (sample_index == 0):
-                print(traindata.shape, labeldata.shape)
-            dataloader = DataLoader(TensorDataset(traindata, labeldata), batch_size=batch_size, shuffle=False)
-            for batch_idx, (inputs_batch, targets_batch) in enumerate(dataloader):  # data batch
-                '''
-                    train on batch with p3d model
-                '''
-                correct, train_loss = self.p3d_model.train_on_batch(inputs_batch, targets_batch, batch_size=batch_size,
-                                                                    learning_rate=learning_rate, save=save, curepoch=epoch)
-                epoch_corr += correct
-                epoch_train_loss += train_loss
-                sample_index += batch_size
-                epoch_batch_idx += 1
-                acc = epoch_corr / sample_index
-                print('Epoch: %d | %d/%d | ' % (epoch + 1, sample_index, train_num),
-                      'Loss: %.3f | Acc: %.3f%% (%d/%d) | Batch_Acc: %.3f%% (%d/%d)'
-                      % (
-                      epoch_train_loss / epoch_batch_idx, 100. * acc, epoch_corr, sample_index, 100. * correct / batch_size,
-                      correct, batch_size))
+        corr = 0
+        val_loss = 0
+        batch_idx = 1
+        traindata = []
+        for filename in self.label_val.iloc[sample_index:sample_index + filein_batch, 0]:
+            rgb = cvread_video_rgb(self.data_path + str(filename) + '.mp4', outframe=16, reh=256, rew=256)
+            traindata.append(rgb)
+        traindata = np.array(traindata).reshape(filein_batch, 3, 16, 256, 256) / 256
+        traindata = torch.from_numpy(traindata)  # Variable(torch.rand(1, 3, 16, 256, 256))
+        labeldata = torch.from_numpy(self.label_train.iloc[sample_index:sample_index + filein_batch, 2].values)
+        if (sample_index == 0):
+            print(traindata.shape, labeldata.shape)
+        dataloader = DataLoader(TensorDataset(traindata, labeldata), batch_size=batch_size, shuffle=False)
+        for batch_idx, (inputs_batch, targets_batch) in enumerate(dataloader):  # data batch
+            '''
+                validate on batch with p3d model
+            '''
+            _correct, _val_loss = self.p3d_model.val_model(inputs_batch,targets_batch)
+            corr += _correct
+            val_loss += _val_loss
+            sample_index += batch_size
+            batch_idx += 1
+            acc = corr / sample_index
+            print('Index: %d/%d | ' % (sample_index, train_num),
+                  'Loss: %.3f | Acc: %.3f%% (%d/%d)'% (val_loss / batch_idx, 100. * acc, corr, sample_index))
 
     def save(self,acc,epoch):
         self.p3d_model.save_model(acc,epoch)
@@ -161,7 +157,7 @@ class MTSVRC:
             while(sample_index+filein_batch<=train_num):#file batch
                 traindata = []
                 for filename in self.label_train.loc[sample_index:sample_index+filein_batch-1,0]:
-                    rgb, flows = cvread_video(self.data_path+str(filename)+'.mp4',outframe=16,reh=256,rew=256)
+                    rgb, flows = cvread_video_rgb(self.data_path+str(filename)+'.mp4',outframe=16,reh=256,rew=256)
                     traindata.append(rgb)
                 traindata = np.array(traindata).reshape(filein_batch,3,16,256,256)/256
                 traindata = torch.from_numpy(traindata)#Variable(torch.rand(1, 3, 16, 256, 256))
