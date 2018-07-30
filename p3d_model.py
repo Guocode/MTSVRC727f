@@ -284,8 +284,8 @@ class P3D(nn.Module):
 
         return x
 
-    def train_on_batch(self, inputs_batch, targets_batch, learning_rate=0.01, batch_size=2,save=False,curepoch=0):
-        #criterion = nn.MSELoss()
+    def train_on_batch(self, inputs_batch, targets_batch, learning_rate=0.01, batch_size=2, save=False, curepoch=0):
+        # criterion = nn.MSELoss()
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.SGD(self.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
         # self.train()
@@ -308,21 +308,15 @@ class P3D(nn.Module):
         # progress_bar\
         return correct, train_loss
 
-
-    def val_model(self,inputs_batch, targets_batch):
-        saved_model = "./checkpoint/ckpt-epoch-5.t7"
+    def val_model(self, inputs_batch, targets_batch):
         criterion = nn.CrossEntropyLoss()
-        if os._exists(saved_model):
-            weights = torch.load(saved_model)['state_dict']
-            self.load_state_dict(weights)
-            print("weight loaded!")
         inputs_batch, targets_batch = inputs_batch.float().to(device), targets_batch.to(device)
         outputs = self(inputs_batch)
         loss = criterion(outputs.float(), targets_batch.long())
         val_loss = loss.item()
         _, predicted = outputs.max(1)
         correct = (targets_batch.int() == predicted.int()).sum().item()
-        return correct,val_loss
+        return correct, val_loss
 
     def save_model(self, acc, epoch):
         state = {
@@ -333,6 +327,7 @@ class P3D(nn.Module):
         if not os.path.isdir('checkpoint'):
             os.mkdir('checkpoint')
         torch.save(state, './checkpoint/ckpt-epoch-' + epoch.__str__() + '.t7')
+
 
 def P3D63(**kwargs):
     """Construct a P3D63 modelbased on a ResNet-50-3D model.
