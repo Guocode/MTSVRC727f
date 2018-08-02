@@ -1,22 +1,13 @@
-#!/usr/bin/python
-# -*- coding: utf-8 -*-
 from __future__ import print_function
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 import torch.nn.functional as F
 from torch.autograd import Variable
 import math
 from functools import partial
-import torchvision
-import torchvision.transforms as transforms
-from utils import progress_bar
-from torch.utils.data import TensorDataset, DataLoader
-import os
 
 __all__ = ['P3D', 'P3D63', 'P3D131', 'P3D199']
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 def conv_S(in_planes, out_planes, stride=1, padding=1):
@@ -171,7 +162,6 @@ class P3D(nn.Module):
         #                        padding=(3, 3, 3), bias=False)
         self.input_channel = 3 if modality == 'RGB' else 2  # 2 is for flow
         self.ST_struc = ST_struc
-        self.num_classes = num_classes
 
         self.conv1_custom = nn.Conv3d(self.input_channel, 64, kernel_size=(1, 7, 7), stride=(1, 2, 2),
                                       padding=(0, 3, 3), bias=False)
@@ -190,26 +180,26 @@ class P3D(nn.Module):
         self.layer3 = self._make_layer(block, 256, layers[2], shortcut_type, stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], shortcut_type, stride=2)
 
-        self.avgpool = nn.AvgPool2d(kernel_size=(8, 8), stride=1)  # pooling layer for res5.   ori:5*5
+        self.avgpool = nn.AvgPool2d(kernel_size=(5, 5), stride=1)  # pooling layer for res5.
         self.dropout = nn.Dropout(p=dropout)
-        self.fc0 = nn.Linear(2048 * 1, num_classes)  # block.expansion
+        self.fc = nn.Linear(512 * block.expansion, num_classes)
 
-        # for m in self.modules():
-        #     if isinstance(m, nn.Conv3d):
-        #         n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-        #         m.weight.data.normal_(0, math.sqrt(2. / n))
-        #     elif isinstance(m, nn.BatchNorm3d):
-        #         m.weight.data.fill_(1)
-        #         m.bias.data.zero_()
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm3d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
 
         # some private attribute
-        self.input_size = (self.input_channel, 16, 256, 256)  # input of the network
+        self.input_size = (self.input_channel, 16, 160, 160)  # input of the network
         self.input_mean = [0.485, 0.456, 0.406] if modality == 'RGB' else [0.5]
         self.input_std = [0.229, 0.224, 0.225] if modality == 'RGB' else [np.mean([0.229, 0.224, 0.225])]
 
     @property
     def scale_size(self):
-        return self.input_size[2] * 256 // 256  # asume that raw images are resized (340,256).
+        return self.input_size[2] * 256 // 160  # asume that raw images are resized (340,256).
 
     @property
     def temporal_length(self):
@@ -278,53 +268,11 @@ class P3D(nn.Module):
         x = x.view(-1, sizes[1], sizes[3], sizes[4])  # Part Res5
         x = self.layer4(x)
         x = self.avgpool(x)
-        sizes = x.size()
-        x = x.view(-1, sizes[1] * sizes[2] * sizes[3])
-        x = self.fc0(self.dropout(x)) #None * 50
 
-        # x = self.sftmax(x)
+        x = x.view(-1, self.fc.in_features)
+        x = self.fc(self.dropout(x))
+
         return x
-
-    def train_on_batch(self, inputs_batch, targets_batch, criterion=nn.CrossEntropyLoss(size_average=True), optimizer = None ):
-        # criterion = nn.MSELoss()
-        #train_loss = 0
-        # total = 0
-        inputs_batch, targets_batch = inputs_batch.float().to(device), targets_batch.to(device)
-        optimizer.zero_grad()
-        outputs = self(inputs_batch)
-        # print(inputs.shape,outputs.shape)
-        # one_hot_target = torch.zeros(batch_size, self.num_classes).to(device).scatter_(1, targets_batch.long().view(
-        #     batch_size, 1), 1)
-        # one_hot_target = torch.zeros(batch_size, self.num_classes).to(device).scatter_(1, targets.long(), 1.0)
-        loss = criterion(outputs.float(), targets_batch.long())
-        loss.backward()
-        optimizer.step()
-        train_loss = loss.item()
-        _, predicted = outputs.max(1)
-        # total += targets_batch.size(0)
-        correct = (targets_batch.int() == predicted.int()).sum().item()
-        # progress_bar\
-        return correct, train_loss
-
-    def val_model(self, inputs_batch, targets_batch):
-        criterion = nn.CrossEntropyLoss()
-        inputs_batch, targets_batch = inputs_batch.float().to(device), targets_batch.to(device)
-        outputs = self(inputs_batch)
-        loss = criterion(outputs.float(), targets_batch.long())
-        val_loss = loss.item()
-        _, predicted = outputs.max(1)
-        correct = (targets_batch.int() == predicted.int()).sum().item()
-        return correct, val_loss
-
-    def save_model(self, acc, epoch):
-        state = {
-            'net': self.state_dict(),
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt-epoch-' + epoch.__str__() + '.t7')
 
 
 def P3D63(**kwargs):
@@ -344,24 +292,14 @@ def P3D131(**kwargs):
 def P3D199(pretrained=False, modality='RGB', **kwargs):
     """construct a P3D199 model based on a ResNet-152-3D model.
     """
-
     model = P3D(Bottleneck, [3, 8, 36, 3], modality=modality, **kwargs)
     if pretrained == True:
         if modality == 'RGB':
             pretrained_file = 'p3d_rgb_199.checkpoint.pth.tar'
         elif modality == 'Flow':
             pretrained_file = 'p3d_flow_199.checkpoint.pth.tar'
-        # weights = torch.load(pretrained_file)['state_dict']
-        # model.load_state_dict(weights)
-
-        pretrained_dict = torch.load(pretrained_file)
-        model_dict = model.state_dict()
-        # 1. filter out unnecessary keys
-        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-        # 2. overwrite entries in the existing state dict
-        model_dict.update(pretrained_dict)
-        model.load_state_dict(model_dict)
-        print("model loaded!")
+        weights = torch.load(pretrained_file)['state_dict']
+        model.load_state_dict(weights)
     return model
 
 
@@ -373,7 +311,6 @@ def get_optim_policies(model=None, modality='RGB', enable_pbn=True):
     normal action:      weight --> non-first conv + fc weight
                         bias   --> non-first conv + fc bias
     bn:                 the first bn2, and many all bn3.
-
     '''
     first_conv_weight = []
     first_conv_bias = []
@@ -442,13 +379,9 @@ def get_optim_policies(model=None, modality='RGB', enable_pbn=True):
 
 
 if __name__ == '__main__':
-    model = P3D199(num_classes=50).to(device)
-    print(model)
-
-    traindata = torch.autograd.Variable(torch.rand(1, 3, 16, 256, 256))
-    model(traindata)
-    label = torch.autograd.Variable(torch.floor(torch.rand(1) * 50).int())
-    # a ,b = model.train_on_batch(traindata, label, batch_size=1, learning_rate=0.1)  # N*64*256*256*3 N*50
-    # print(model.val_model(traindata, label))
-    with SummaryWriter(comment='LeNet') as w:
-        w.add_graph(model, (traindata, ))
+    model = P3D63(num_classes=50)
+    # model = model.cuda()
+    data = torch.autograd.Variable(
+        torch.rand(1, 3, 16, 160, 160))#.cuda()  # if modality=='Flow', please change the 2nd dimension 3==>2
+    out = model(data)
+    print(out.size(), out)

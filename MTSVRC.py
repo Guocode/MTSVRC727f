@@ -1,3 +1,5 @@
+import cv2
+
 import numpy as np
 import pandas as pd
 import threading
@@ -6,11 +8,14 @@ import torch
 from cvread_video import cvread_video_rgb
 from torch.utils.data import TensorDataset, DataLoader
 import os
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+import torch.nn as nn
+import torch.optim as optim
+device = 'cpu'
 import logging
 import os.path
 import time
+from tensorboardX import SummaryWriter
+writer = SummaryWriter()
 
 # 第一步，创建一个logger
 logger = logging.getLogger()
@@ -35,10 +40,13 @@ class MTSVRC:
         self.data_size = None
         self.data_path = data_path  # "/media/guo/搬砖BOY/dataset/"#"D:/dataset/"#/media/guo/搬砖BOY/dataset/"
         self.label_train = pd.read_csv('./train_label.cvs', header=None,
-                                       sep=',')  # self.load_label(label_train_file,shuffle=True)#("/media/guo/搬砖BOY/English/trainEnglish.txt")#("D:/dataset/English/trainEnglish.txt")
+                                       sep=',')
+        # self.load_label("/media/guo/搬砖BOY/English/trainEnglish.txt",
+        # shuffle=False)  # pd.read_csv('./train_label.cvs', header=None,
+        # sep=',')  # self.load_label(label_train_file,shuffle=True)#("/media/guo/搬砖BOY/English/trainEnglish.txt")#("D:/dataset/English/trainEnglish.txt")
         self.label_val = pd.read_csv('./val_label.cvs', header=None,
                                      sep=',')  # self.load_label(label_val_file,shuffle=False)#("/media/guo/搬砖BOY/English/valEnglish.txt")#("D:/dataset/English/valEnglish.txt")
-        self.p3d_model = P3D63(num_classes=50)
+        self.p3d_model = P3D199(num_classes=50)
         self.ch_en_labels = {'宠物狗': 'dog',
                              '宠物猫': 'cat',
                              '宠物鼠': 'rat',
@@ -91,7 +99,7 @@ class MTSVRC:
                              '美发': 'hairdressing'
                              }
         self.labels = list(self.ch_en_labels.values())
-        # self.label_train.loc[:, 2] = self.label_train.loc[:, 2].replace(dict(zip(self.labels, list(range(50)))))
+        #self.label_train.loc[:, 2] = self.label_train.loc[:, 2].replace(dict(zip(self.labels, list(range(50)))))
         # self.label_val.loc[:, 2] = self.label_val.loc[:, 2].replace(dict(zip(self.labels, list(range(50)))))
         # self.label_train.to_csv('train_label.cvs', index=False, header=False)
         # self.label_val.to_csv('val_label.cvs', index=False, header=False)
@@ -99,9 +107,27 @@ class MTSVRC:
     def load_data(self):
         pass
 
-    def train(self, filein_batch=16, batch_size=8, epoch_num=5, learning_rate=0.01, save=False, train_num=64701):
+    def train(self, filein_batch=64, batch_size=8, epoch_num=5, learning_rate=0.01, save=True, train_num=64701,
+              trans=True, load = None):
         print("Start training!")
         self.p3d_model.to(device)
+        model_dict = self.p3d_model.state_dict()
+        saved_model = load
+        if os.path.exists(saved_model):
+            pretrained_dict = torch.load(saved_model)['state_dict']
+            pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+            # self.p3d_model.load_state_dict(pretrained_dict)
+            model_dict.update(pretrained_dict)
+            self.p3d_model.load_state_dict(model_dict)
+            # pretrained_dict = torch.load(saved_model,map_location=lambda storage, loc: storage)
+            # pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in pretrained_dict}
+            # self.p3d_model.load_state_dict(pretrained_dict)
+            print("weight loaded!")
+        else:
+            print("weight file not found!")
+        criterion = nn.CrossEntropyLoss(size_average=True)
+        optimizer = optim.SGD(self.p3d_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
+        self.p3d_model.train()
         for epoch in range(epoch_num):  # loop over the dataset multiple times
             print('\nStart Epoch: %d' % (epoch + 1))
             sample_index = 0
@@ -139,10 +165,10 @@ class MTSVRC:
                     '''
                         train on batch with p3d model
                     '''
-                    correct, train_loss = self.p3d_model.train_on_batch(inputs_batch, targets_batch,
-                                                                        batch_size=batch_size,
-                                                                        learning_rate=learning_rate, save=save,
-                                                                        curepoch=epoch)
+                    # to_np(img.view(-1, 28, 28)[:10])
+                    writer.add_image('input', inputs_batch[0, :, 0, :,:], sample_index)
+                    #writer.add_text('class', targets_batch[0], sample_index)
+                    correct, train_loss = self.p3d_model.train_on_batch(inputs_batch, targets_batch,criterion=criterion,optimizer=optimizer)
                     epoch_corr += correct
                     epoch_train_loss += train_loss
                     sample_index += batch_size
@@ -165,13 +191,20 @@ class MTSVRC:
                 self.save(acc, epoch)
         print('Training has finished!')
 
-    def val(self, filein_batch=128, batch_size=16):
+    def val(self, filein_batch=1, batch_size=1,model_path = None):
         print("Start validating!")
         self.p3d_model.to(device)
-        saved_model = "./checkpoint/ckpt-epoch-5.t7"
-        if os._exists(saved_model):
-            weights = torch.load(saved_model)['state_dict']
-            self.p3d_model.load_state_dict(weights)
+        model_dict = self.p3d_model.state_dict()
+        saved_model = model_path
+        if os.path.exists(saved_model):
+            pretrained_dict = torch.load(saved_model)['state_dict']
+            pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+            # self.p3d_model.load_state_dict(pretrained_dict)
+            model_dict.update(pretrained_dict)
+            self.p3d_model.load_state_dict(model_dict)
+            # pretrained_dict = torch.load(saved_model,map_location=lambda storage, loc: storage)
+            # pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in pretrained_dict}
+            # self.p3d_model.load_state_dict(pretrained_dict)
             print("weight loaded!")
         else:
             print("weight file not found!")
@@ -287,8 +320,13 @@ class loaddata_Thread(threading.Thread):  # 继承父类threading.Thread
         traindata = []
         for filename in mtsvrc.label_train.iloc[self.sample_index:self.sample_index + self.filein_batch, 0]:
             rgb = cvread_video_rgb(mtsvrc.data_path + str(filename) + '.mp4', outframe=16, reh=256, rew=256)
-            traindata.append(rgb)
-        traindata = np.array(traindata).reshape(self.filein_batch, 3, 16, 256, 256) / 256
+            # cv2.imshow("frame", rgb[0])
+            # cv2.waitKey(0)
+            traindata.append(rgb.transpose((3,0,1,2)))
+        traindata = np.stack(traindata, axis=0)/256
+                        #reshape(self.filein_batch, 3, 16, 256, 256) / 256
+
+        #traindata = np.array(traindata).reshape(self.filein_batch, 3, 16, 256, 256) / 256
         traindata = torch.from_numpy(traindata)  # Variable(torch.rand(1, 3, 16, 256, 256))
         labeldata = torch.from_numpy(
             mtsvrc.label_train.iloc[self.sample_index:self.sample_index + self.filein_batch, 2].values)
@@ -301,13 +339,14 @@ class loaddata_Thread(threading.Thread):  # 继承父类threading.Thread
 
 
 if __name__ == '__main__':
-    data_path = "/media/guo/搬砖BOY/dataset/"  # "D:/dataset/"#/media/guo/搬砖BOY/dataset/"
-    label_train = "/media/guo/搬砖BOY/English/trainEnglish.txt"  # ("D:/dataset/English/trainEnglish.txt")
-    label_val = "/media/guo/搬砖BOY/English/valEnglish.txt"  # ("D:/dataset/English/valEnglish.txt")
+    data_path = "D:/dataset/" #/media/guo/搬砖BOY/dataset/"#"home/guo/dataset/"#"/media/guo/搬砖BOY/dataset/"  # "D:/dataset/"#/media/guo/搬砖BOY/dataset/"
+    label_train = "D:/dataset/English/trainEnglish.txt" #"home/guo/trainEnglish.txt"#"/media/guo/搬砖BOY/English/trainEnglish.txt"  # ("D:/dataset/English/trainEnglish.txt")
+    label_val = "D:/dataset/English/valEnglish.txt" #"home/guo/valEnglish.txt" #"/media/guo/搬砖BOY/English/valEnglish.txt"  # ("D:/dataset/English/valEnglish.txt")
+    model_path = "D:/p3d_rgb_199.checkpoint.pth.tar" #"home/guo/p3d_rgb_199.checkpoint.pth.tar"#"/media/guo/搬砖BOY/p3d_rgb_199.checkpoint.pth.tar"
     mtsvrc = MTSVRC(data_path, label_train, label_val)
     print("cuda:" + str(torch.cuda.is_available()))
-    # mtsvrc.val(filein_batch = 2,batch_size = 2)
+    #mtsvrc.val(filein_batch=2, batch_size=1, model_path="/media/guo/搬砖BOY/p3d_rgb_199.checkpoint.pth.tar")
     # mtsvrc.data_check(filein_batch=8)
-    mtsvrc.train(batch_size=1, filein_batch=2)
+    mtsvrc.train(batch_size=1, filein_batch=1, learning_rate=0.01, load=model_path)
     # print(mtsvrc.label_val.head())
     print("exit")

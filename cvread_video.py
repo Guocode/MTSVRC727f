@@ -50,6 +50,7 @@ def cvread_video_rgb(video_path, outframe=16, reh=256, rew=256, show=False):
             try:
                 frame = cv_read_video_iframe(cap, i)
                 frame = cv2.resize(frame, (reh, rew), interpolation=cv2.INTER_CUBIC)
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 rgbs.append(frame)
             except Exception as e:
                 print(e)
@@ -119,7 +120,7 @@ def cvread_video_flow(video_path, outframe=16, reh=256, rew=256, show=False):
 
 
 if __name__ == '__main__':
-    path = "D:/dataset/911706308.mp4"#"/media/guo/搬砖BOY/dataset/911706308.mp4"  # "/Users/guoziheng/Movies/5.mp4"
+    path = "/media/guo/搬砖BOY/dataset/911706308.mp4"  # "/Users/guoziheng/Movies/5.mp4"
     d1 = datetime.datetime.now()
     flows = cvread_video_flow(path, outframe=16, reh=256, rew=256, show=True)
     d2 = datetime.datetime.now()

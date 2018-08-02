@@ -14,6 +14,8 @@ import torchvision.transforms as transforms
 from utils import progress_bar
 from torch.utils.data import TensorDataset, DataLoader
 import os
+from torchviz import make_dot, make_dot_from_trace
+from tensorboardX import SummaryWriter
 
 __all__ = ['P3D', 'P3D63', 'P3D131', 'P3D199']
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -72,7 +74,7 @@ class Bottleneck(nn.Module):
         # self.conv2 = nn.Conv3d(planes, planes, kernel_size=3, stride=stride,
         #                        padding=1, bias=False)
         self.id = n_s
-        self.ST = 'A'#list(self.ST_struc)[self.id % self.len_ST]
+        self.ST = list(self.ST_struc)[self.id % self.len_ST]
         if self.id < self.depth_3d:
             self.conv2 = conv_S(planes, planes, stride=1, padding=(0, 1, 1))
             self.bn2 = nn.BatchNorm3d(planes)
@@ -192,15 +194,15 @@ class P3D(nn.Module):
 
         self.avgpool = nn.AvgPool2d(kernel_size=(8, 8), stride=1)  # pooling layer for res5.   ori:5*5
         self.dropout = nn.Dropout(p=dropout)
-        self.fc0 = nn.Linear(2048 * 1, num_classes)  # block.expansion
+        self.fc = nn.Linear(2048 * 1, num_classes)  # block.expansion
 
-        # for m in self.modules():
-        #     if isinstance(m, nn.Conv3d):
-        #         n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-        #         m.weight.data.normal_(0, math.sqrt(2. / n))
-        #     elif isinstance(m, nn.BatchNorm3d):
-        #         m.weight.data.fill_(1)
-        #         m.bias.data.zero_()
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm3d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
 
         # some private attribute
         self.input_size = (self.input_channel, 16, 256, 256)  # input of the network
@@ -280,21 +282,23 @@ class P3D(nn.Module):
         x = self.avgpool(x)
         sizes = x.size()
         x = x.view(-1, sizes[1] * sizes[2] * sizes[3])
-        x = self.fc0(self.dropout(x)) #None * 50
+        x = self.fc(self.dropout(x))
 
-        # x = self.sftmax(x)
         return x
 
-    def train_on_batch(self, inputs_batch, targets_batch, criterion=nn.CrossEntropyLoss(size_average=True), optimizer = None ):
+    def train_on_batch(self, inputs_batch, targets_batch, learning_rate=0.01, batch_size=2, save=False, curepoch=0):
         # criterion = nn.MSELoss()
-        #train_loss = 0
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(self.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
+        # self.train()
+        train_loss = 0
         # total = 0
         inputs_batch, targets_batch = inputs_batch.float().to(device), targets_batch.to(device)
         optimizer.zero_grad()
         outputs = self(inputs_batch)
         # print(inputs.shape,outputs.shape)
-        # one_hot_target = torch.zeros(batch_size, self.num_classes).to(device).scatter_(1, targets_batch.long().view(
-        #     batch_size, 1), 1)
+        one_hot_target = torch.zeros(batch_size, self.num_classes).to(device).scatter_(1, targets_batch.long().view(
+            batch_size, 1), 1)
         # one_hot_target = torch.zeros(batch_size, self.num_classes).to(device).scatter_(1, targets.long(), 1.0)
         loss = criterion(outputs.float(), targets_batch.long())
         loss.backward()
@@ -361,7 +365,6 @@ def P3D199(pretrained=False, modality='RGB', **kwargs):
         # 2. overwrite entries in the existing state dict
         model_dict.update(pretrained_dict)
         model.load_state_dict(model_dict)
-        print("model loaded!")
     return model
 
 
@@ -441,14 +444,43 @@ def get_optim_policies(model=None, modality='RGB', enable_pbn=True):
     ]
 
 
-if __name__ == '__main__':
-    model = P3D199(num_classes=50).to(device)
-    print(model)
+class TwoStream(nn.Module):
 
+    def __init__(self):
+        super(TwoStream, self).__init__()
+        self.rgb_model = P3D63()
+        self.flow_model = P3D63()
+    def forward(self, rgb, flow):
+        x = torch.stack([self.rgb_model(rgb), self.flow_model(flow)], dim=1, out=None)
+        x = (self.rgb_model(rgb) + self.flow_model(flow)) / 2.
+        return x
+    # def train(self, rgb, flow, targets_batch, learning_rate=0.01, batch_size=2):
+    #     print("train")
+    #     criterion = nn.CrossEntropyLoss()
+    #     optimizer = optim.SGD(self.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
+    #     rgb, flow, targets_batch = rgb.float().to(device),flow.float().to(device), targets_batch.to(device)
+    #     optimizer.zero_grad()
+    #     outputs = self(rgb,flow)
+    #     loss = criterion(outputs.float(), targets_batch.long())
+    #     loss.backward()
+    #     optimizer.step()
+    #     train_loss = loss.item()
+    #     _, predicted = outputs.max(1)
+    #     correct = (targets_batch.int() == predicted.int()).sum().item()
+    #     return correct, train_loss
+
+if __name__ == '__main__':
     traindata = torch.autograd.Variable(torch.rand(1, 3, 16, 256, 256))
-    model(traindata)
     label = torch.autograd.Variable(torch.floor(torch.rand(1) * 50).int())
-    # a ,b = model.train_on_batch(traindata, label, batch_size=1, learning_rate=0.1)  # N*64*256*256*3 N*50
-    # print(model.val_model(traindata, label))
+    rgb_model = P3D63(num_classes=50).to(device)
+    flow_model = P3D63(num_classes=50).to(device)
+    two_stream_model = TwoStream().to(device)
+    # print(two_stream_model)
+    # y = two_stream_model(traindata,traindata)
+    # two_stream_model.train(traindata,traindata,label)
+    # g = make_dot(y, params=dict(list(two_stream_model.named_parameters()) + [('rgb', traindata),('flow',traindata)]))
+    #g.view()
     with SummaryWriter(comment='LeNet') as w:
-        w.add_graph(model, (traindata, ))
+        w.add_graph(rgb_model,traindata)
+        w.add_graph(flow_model, traindata)
+        w.add_graph(two_stream_model,(traindata,traindata),verbose=True)

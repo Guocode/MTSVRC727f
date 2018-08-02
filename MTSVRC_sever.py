@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import numpy as np
 import pandas as pd
 import threading
@@ -7,7 +6,8 @@ import torch
 from cvread_video import cvread_video_rgb
 from torch.utils.data import TensorDataset, DataLoader
 import os
-
+import torch.nn as nn
+import torch.optim as optim
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 import logging
 import os.path
@@ -35,11 +35,7 @@ class MTSVRC:
     def __init__(self, data_path, label_train_file, label_val_file):
         self.data_size = None
         self.data_path = data_path  # "/media/guo/搬砖BOY/dataset/"#"D:/dataset/"#/media/guo/搬砖BOY/dataset/"
-        self.label_train = pd.read_csv('./train_label.cvs', header=None,
-                                       sep=',')  # self.load_label(label_train_file,shuffle=True)#("/media/guo/搬砖BOY/English/trainEnglish.txt")#("D:/dataset/English/trainEnglish.txt")
-        self.label_val = pd.read_csv('./val_label.cvs', header=None,
-                                     sep=',')  # self.load_label(label_val_file,shuffle=False)#("/media/guo/搬砖BOY/English/valEnglish.txt")#("D:/dataset/English/valEnglish.txt")
-        self.p3d_model = P3D63(num_classes=50)
+        self.p3d_model = P3D199(num_classes=50,pretrained=True)
         self.ch_en_labels = {'宠物狗': 'dog',
                              '宠物猫': 'cat',
                              '宠物鼠': 'rat',
@@ -91,6 +87,13 @@ class MTSVRC:
                              '美甲': 'manicure',
                              '美发': 'hairdressing'
                              }
+        self.label_train = pd.read_csv('./train_label.cvs', header=None,
+                                       sep=',')
+        # self.load_label(label_train_file,shuffle=False)#pd.read_csv('./train_label.cvs', header=None,
+        # sep=',')  # self.load_label(label_train_file,shuffle=True)#("/media/guo/搬砖BOY/English/trainEnglish.txt")#("D:/dataset/English/trainEnglish.txt")
+        self.label_val = pd.read_csv('./val_label.cvs', header=None,
+                                     sep=',')
+        # self.load_label(label_val_file,shuffle=False)#("/media/guo/搬砖BOY/English/valEnglish.txt")#("D:/dataset/English/valEnglish.txt")
         self.labels = list(self.ch_en_labels.values())
         # self.label_train.loc[:, 2] = self.label_train.loc[:, 2].replace(dict(zip(self.labels, list(range(50)))))
         # self.label_val.loc[:, 2] = self.label_val.loc[:, 2].replace(dict(zip(self.labels, list(range(50)))))
@@ -100,9 +103,20 @@ class MTSVRC:
     def load_data(self):
         pass
 
-    def train(self, filein_batch=16, batch_size=8, epoch_num=5, learning_rate=0.01, save=False, train_num=64701):
+    def train(self, filein_batch=64, batch_size=8, epoch_num=5, learning_rate=0.01, save=True, train_num=64701,
+              trans=True, load = None):
         print("Start training!")
         self.p3d_model.to(device)
+        self.p3d_model.train()
+        if load is not None:
+            saved_model = load
+            torch_load = torch.load(saved_model)
+            weights = torch_load['net']
+            self.p3d_model.load_state_dict(weights)
+            print("weight loaded!")
+            print(torch_load['acc'],print(torch_load['epoch']))
+        criterion = nn.CrossEntropyLoss(size_average=True)
+        optimizer = optim.SGD(self.p3d_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
         for epoch in range(epoch_num):  # loop over the dataset multiple times
             print('\nStart Epoch: %d' % (epoch + 1))
             sample_index = 0
@@ -121,17 +135,18 @@ class MTSVRC:
                     traindata = preload_train_data
                     labeldata = preload_label_data
                 else:
-                    loaddata_thread = loaddata_Thread(sample_index, filein_batch, self)
+                    loaddata_thread = loaddata_Thread(sample_index, filein_batch, self, trans)
                     loaddata_thread.start()
                     loaddata_thread.join()
                     traindata = preload_train_data
                     labeldata = preload_label_data
                     print(traindata.shape, labeldata.shape)
                 preloaded = False
+
                 '''
                     create a thread to preload data 
                 '''
-                loaddata_thread = loaddata_Thread(sample_index + filein_batch, filein_batch, self)
+                loaddata_thread = loaddata_Thread(sample_index + filein_batch, filein_batch, self, trans)
                 loaddata_thread.start()
                 ############# data loaded, start training
 
@@ -140,10 +155,7 @@ class MTSVRC:
                     '''
                         train on batch with p3d model
                     '''
-                    correct, train_loss = self.p3d_model.train_on_batch(inputs_batch, targets_batch,
-                                                                        batch_size=batch_size,
-                                                                        learning_rate=learning_rate, save=save,
-                                                                        curepoch=epoch)
+                    correct, train_loss = self.p3d_model.train_on_batch(inputs_batch, targets_batch,criterion=criterion,optimizer=optimizer)
                     epoch_corr += correct
                     epoch_train_loss += train_loss
                     sample_index += batch_size
@@ -169,6 +181,7 @@ class MTSVRC:
     def val(self, filein_batch=128, batch_size=16):
         print("Start validating!")
         self.p3d_model.to(device)
+        self.p3d_model.eval()
         saved_model = "./checkpoint/ckpt-epoch-5.t7"
         if os._exists(saved_model):
             weights = torch.load(saved_model)['state_dict']
@@ -221,7 +234,7 @@ class MTSVRC:
                     acc = corr / sample_index
                     print('Index: %d/%d | ' % (sample_index, train_num),
                           'Loss: %.3f | Acc: %.3f%% (%d/%d)' % (
-                          val_loss / sample_index, 100. * acc, corr, sample_index))
+                              val_loss / sample_index, 100. * acc, corr, sample_index))
                 if not preloaded:
                     loaddata_thread.join()
                 del (loaddata_thread)
@@ -239,7 +252,7 @@ class MTSVRC:
     def load_labelnames(self, txt_file_path):
         return pd.read_table(txt_file_path, header=None, encoding='utf-8', delimiter=':,')
 
-    def data_check(self, filein_batch=16, epoch_num=1):  # run without training to check data
+    def data_check(self, filein_batch=16, epoch_num=1, trans=True):  # run without training to check data
         print("Start checking!")
         train_num = 64701
         for epoch in range(epoch_num):  # loop over the dataset multiple times
@@ -257,7 +270,7 @@ class MTSVRC:
                     traindata = preload_train_data
                     labeldata = preload_label_data
                 else:
-                    loaddata_thread = loaddata_Thread(sample_index, filein_batch, self)
+                    loaddata_thread = loaddata_Thread(sample_index, filein_batch, self, trans)
                     loaddata_thread.start()
                     loaddata_thread.join()
                     traindata = preload_train_data
@@ -267,7 +280,7 @@ class MTSVRC:
                 '''
                     create a thread to preload data 
                 '''
-                loaddata_thread = loaddata_Thread(sample_index + filein_batch, filein_batch, self)
+                loaddata_thread = loaddata_Thread(sample_index + filein_batch, filein_batch, self, trans)
                 loaddata_thread.start()
                 sample_index += filein_batch
                 if not preloaded:
@@ -276,20 +289,38 @@ class MTSVRC:
 
         print('Data check passed!')
 
+    def pre_trans(self):
+        print("Start translation!")
+        train_num = 64701
+        sample_index = 0
+        while (sample_index < train_num):  # file batch
+            npdata = cvread_video_rgb(self.data_path + str(self.label_train.iloc[sample_index, 0]) + '.mp4',
+                                      outframe=16, reh=256, rew=256)
+            np.save("/opt/dataset/trans_data/" + str(self.label_train.iloc[sample_index, 0]) + ".npy", npdata)
+            print("/opt/dataset/trans_data/" + str(self.label_train.iloc[sample_index, 0]) + ".npy", ": saved!")
+            sample_index += 1
+        return
+
 
 class loaddata_Thread(threading.Thread):  # 继承父类threading.Thread
-    def __init__(self, sample_index, filein_batch, mtsvrc):
+    def __init__(self, sample_index, filein_batch, mtsvrc, trans):
         threading.Thread.__init__(self)
         self.sample_index = sample_index
         self.filein_batch = filein_batch
         self.mtsvrc = mtsvrc
+        self.trans = trans
 
-    def run(self):  # 把要执行的代码写到run函数里面 线程在创建后会直接运行run函数
+    def run(self):
         traindata = []
-        for filename in mtsvrc.label_train.iloc[self.sample_index:self.sample_index + self.filein_batch, 0]:
-            rgb = cvread_video_rgb(mtsvrc.data_path + str(filename) + '.mp4', outframe=16, reh=256, rew=256)
-            traindata.append(rgb)
-        traindata = np.array(traindata).reshape(self.filein_batch, 3, 16, 256, 256) / 256
+        if self.trans:
+            for filename in mtsvrc.label_train.iloc[self.sample_index:self.sample_index + self.filein_batch, 0]:
+                rgb = np.load(mtsvrc.data_path + "trans_data/" + str(filename) + '.npy')
+                traindata.append(rgb.transpose((3,0,1,2)))
+        else:
+            for filename in mtsvrc.label_train.iloc[self.sample_index:self.sample_index + self.filein_batch, 0]:
+                rgb = cvread_video_rgb(mtsvrc.data_path + str(filename) + '.mp4', outframe=16, reh=256, rew=256)
+                traindata.append(rgb.transpose((3,0,1,2)))
+        traindata = np.stack(traindata, axis=0) / 256
         traindata = torch.from_numpy(traindata)  # Variable(torch.rand(1, 3, 16, 256, 256))
         labeldata = torch.from_numpy(
             mtsvrc.label_train.iloc[self.sample_index:self.sample_index + self.filein_batch, 2].values)
@@ -305,9 +336,11 @@ if __name__ == '__main__':
     data_path = "/opt/dataset/"  # "/media/guo/搬砖BOY/dataset/"#"D:/dataset/"#/media/guo/搬砖BOY/dataset/"
     label_train = "./trainEnglish.txt"  # "/media/guo/搬砖BOY/English/trainEnglish.txt"#("D:/dataset/English/trainEnglish.txt")
     label_val = "./valEnglish.txt"  # ("D:/dataset/English/valEnglish.txt")
+    model_file = "./checkpoint/ckpt-epoch-69.t7"
     mtsvrc = MTSVRC(data_path, label_train, label_val)  # p3d63
+    # mtsvrc.pre_trans()
     print("cuda:" + str(torch.cuda.is_available()))
     # mtsvrc.data_check(batch_size=8,filein_batch=64,learning_rate=0.05)
-    mtsvrc.train(batch_size=8, filein_batch=64, learning_rate=0.05)
+    mtsvrc.train(batch_size=8, filein_batch=512, learning_rate=0.01, epoch_num=50)
     # print(mtsvrc.label_val.head())
     print("exit")
